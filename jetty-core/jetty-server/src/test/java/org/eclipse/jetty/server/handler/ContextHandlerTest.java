@@ -788,7 +788,7 @@ public class ContextHandlerTest
     {
         if (file.exists())
         {
-            assertTrue(file.setWritable(true));
+            assertTrue(file.setWritable(true), file::toString);
             if (file.isDirectory())
             {
                 File[] files = file.listFiles();
@@ -811,14 +811,14 @@ public class ContextHandlerTest
         assertTrue(notDirectory.createNewFile());
 
         File notWritable = new File(TEST_OK, "notWritable");
-        assertTrue(notWritable.mkdir());
-        assertTrue(notWritable.setWritable(false));
+        assertTrue(notWritable.mkdir(), notWritable::toString);
+        assertTrue(notWritable.setWritable(false), notWritable::toString);
 
         File notWriteableParent = new File(TEST_OK, "notWritableParent");
-        assertTrue(notWriteableParent.mkdir());
+        assertTrue(notWriteableParent.mkdir(), notWriteableParent::toString);
         File cantDelete = new File(notWriteableParent, "cantDelete");
         assertTrue(cantDelete.mkdirs());
-        assertTrue(notWriteableParent.setWritable(false));
+        assertTrue(notWriteableParent.setWritable(false), notWriteableParent::toString);
 
         return Stream.of(
             Arguments.of(false, notDirectory),

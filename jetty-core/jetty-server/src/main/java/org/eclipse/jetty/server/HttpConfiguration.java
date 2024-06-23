@@ -67,7 +67,7 @@ public class HttpConfiguration implements Dumpable
     private int _securePort;
     private long _idleTimeout = -1;
     private String _secureScheme = HttpScheme.HTTPS.asString();
-    private boolean _sendServerVersion = true;
+    private boolean _sendServerVersion = false;
     private boolean _sendXPoweredBy = false;
     private boolean _sendDateHeader = true;
     private boolean _delayDispatchUntilContent = true;

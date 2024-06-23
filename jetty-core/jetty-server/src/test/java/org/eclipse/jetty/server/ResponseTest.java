@@ -35,6 +35,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -84,8 +85,77 @@ public class ResponseTest
     }
 
     @Test
+    public void testDateFieldsPersistent() throws Exception
+    {
+        server.setHandler(new Handler.Abstract()
+        {
+            @Override
+            public boolean handle(Request request, Response response, Callback callback)
+            {
+                String date = response.getHeaders().get(HttpHeader.DATE);
+
+                response.getHeaders().add("Temp", "field");
+                response.getHeaders().add("Test", "before reset");
+                assertThrows(UnsupportedOperationException.class, () -> response.getHeaders().remove(HttpHeader.DATE));
+                response.getHeaders().remove("Temp");
+
+                response.getHeaders().add("Temp", "field");
+                Iterator<HttpField> iterator = response.getHeaders().iterator();
+                assertThat(iterator.next().getHeader(), is(HttpHeader.DATE));
+                assertThrows(UnsupportedOperationException.class, iterator::remove);
+                assertThat(iterator.next().getName(), is("Test"));
+                assertThat(iterator.next().getName(), is("Temp"));
+                iterator.remove();
+                assertFalse(response.getHeaders().contains("Temp"));
+                assertFalse(iterator.hasNext());
+
+                ListIterator<HttpField> listIterator = response.getHeaders().listIterator();
+                assertThat(listIterator.next().getHeader(), is(HttpHeader.DATE));
+                assertThrows(UnsupportedOperationException.class, () -> listIterator.set(new HttpField("Something", "else")));
+                listIterator.set(new HttpField(HttpHeader.DATE, "1970-01-01"));
+                assertThat(listIterator.previous().getHeader(), is(HttpHeader.DATE));
+                assertThrows(UnsupportedOperationException.class, listIterator::remove);
+                assertThat(listIterator.next().getHeader(), is(HttpHeader.DATE));
+                assertThrows(UnsupportedOperationException.class, listIterator::remove);
+                listIterator.add(new HttpField("Temp", "value"));
+                assertThat(listIterator.previous().getName(), is("Temp"));
+                listIterator.remove();
+                assertFalse(response.getHeaders().contains("Temp"));
+
+                response.getHeaders().add("Temp", "field");
+                response.getHeaders().put(HttpHeader.DATE, "1970-02-02");
+
+                response.reset();
+
+                assertThat(response.getHeaders().get(HttpHeader.DATE), is(date));
+
+                response.getHeaders().add("Test", "after reset");
+
+                response.getHeaders().putDate("Date", 1L);
+                callback.succeeded();
+                return true;
+            }
+        });
+        server.start();
+
+        String request = """
+                GET /path HTTP/1.0\r
+                Host: hostname\r
+                \r
+                """;
+        HttpTester.Response response = HttpTester.parseResponse(connector.getResponse(request));
+        assertEquals(HttpStatus.OK_200, response.getStatus());
+        assertThat(response.get(HttpHeader.SERVER), nullValue());
+        assertThat(response.get(HttpHeader.DATE), notNullValue());
+        assertThat(response.get("Test"), is("after reset"));
+    }
+
+    @Test
     public void testServerDateFieldsPersistent() throws Exception
     {
+        server.getConnectors()[0].getConnectionFactory(HttpConnectionFactory.class)
+            .getHttpConfiguration().setSendServerVersion(true);
+
         server.setHandler(new Handler.Abstract()
         {
             @Override
@@ -414,7 +484,7 @@ public class ResponseTest
         assertEquals(HttpStatus.OK_200, response.getStatus());
 
         // ensure there are only 1 entry for each of these headers
-        List<HttpHeader> expectedHeaders = List.of(HttpHeader.SERVER, HttpHeader.X_POWERED_BY, HttpHeader.DATE, HttpHeader.CONTENT_LENGTH);
+        List<HttpHeader> expectedHeaders = List.of(HttpHeader.X_POWERED_BY, HttpHeader.DATE, HttpHeader.CONTENT_LENGTH);
         for (HttpHeader expectedHeader: expectedHeaders)
         {
             List<String> actualHeader = response.getValuesList(expectedHeader);
@@ -452,7 +522,7 @@ public class ResponseTest
         assertEquals(HttpStatus.OK_200, response.getStatus());
 
         // ensure there are only 1 entry for each of these headers
-        List<HttpHeader> expectedHeaders = List.of(HttpHeader.SERVER, HttpHeader.X_POWERED_BY, HttpHeader.DATE, HttpHeader.CONTENT_LENGTH);
+        List<HttpHeader> expectedHeaders = List.of(HttpHeader.X_POWERED_BY, HttpHeader.DATE, HttpHeader.CONTENT_LENGTH);
         for (HttpHeader expectedHeader: expectedHeaders)
         {
             List<String> actualHeader = response.getValuesList(expectedHeader);
@@ -461,6 +531,41 @@ public class ResponseTest
         }
         assertThat(response.get(HttpHeader.CONTENT_LENGTH), is("4"));
         assertThat(response.get(HttpHeader.X_POWERED_BY), is("SomeServer"));
+    }
+
+    @Test
+    public void testServerVersionByOverride() throws Exception
+    {
+        server.getConnectors()[0].getConnectionFactory(HttpConnectionFactory.class)
+            .getHttpConfiguration().setSendServerVersion(true);
+        server.setHandler(new Handler.Abstract()
+        {
+            @Override
+            public boolean handle(Request request, Response response, Callback callback)
+            {
+                Content.Sink.write(response, true, "Test", callback);
+                return true;
+            }
+        });
+        server.start();
+
+        String request = """
+                GET /test HTTP/1.0\r
+                Host: hostname\r
+                \r
+                """;
+        HttpTester.Response response = HttpTester.parseResponse(connector.getResponse(request));
+        assertEquals(HttpStatus.OK_200, response.getStatus());
+
+        // ensure there are only 1 entry for each of these headers
+        List<HttpHeader> expectedHeaders = List.of(HttpHeader.DATE, HttpHeader.CONTENT_LENGTH);
+        for (HttpHeader expectedHeader: expectedHeaders)
+        {
+            List<String> actualHeader = response.getValuesList(expectedHeader);
+            assertThat(expectedHeader + " exists", actualHeader, is(notNullValue()));
+            assertThat(expectedHeader + " header count", actualHeader.size(), is(1));
+        }
+        assertThat(response.get(HttpHeader.CONTENT_LENGTH), is("4"));
     }
 
     @Test

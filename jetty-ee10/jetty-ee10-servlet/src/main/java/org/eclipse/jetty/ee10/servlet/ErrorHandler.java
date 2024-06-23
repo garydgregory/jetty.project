@@ -56,9 +56,9 @@ public class ErrorHandler implements Request.Handler
     public static final String ERROR_CONTEXT = "org.eclipse.jetty.server.error_context";
     public static final String ERROR_CHARSET = "org.eclipse.jetty.server.error_charset";
 
-    boolean _showServlet = true;
-    boolean _showStacks = true;
-    boolean _disableStacks = false;
+    boolean _showServlet = false;
+    boolean _showStacks = false;
+    boolean _disableStacks = true;
     boolean _showMessageInTitle = true;
     String _cacheControl = "must-revalidate,no-cache,no-store";
 
