@@ -13,6 +13,13 @@
 
 package org.eclipse.jetty.ee9.proxy;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -41,18 +48,13 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
-import jakarta.servlet.ServletException;
-import jakarta.servlet.ServletInputStream;
-import jakarta.servlet.ServletOutputStream;
-import jakarta.servlet.http.HttpServlet;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import org.eclipse.jetty.client.AsyncRequestContent;
 import org.eclipse.jetty.client.BytesRequestContent;
 import org.eclipse.jetty.client.CompletableResponseListener;
@@ -88,12 +90,25 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletInputStream;
+import jakarta.servlet.ServletOutputStream;
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.routing.DefaultProxyRoutePlanner;
+import org.apache.hc.client5.http.routing.HttpRoutePlanner;
+import org.apache.hc.core5.http.ClassicHttpRequest;
+import org.apache.hc.core5.http.ContentType;
+import org.apache.hc.core5.http.HttpEntity;
+import org.apache.hc.core5.http.HttpHost;
+import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
+import org.apache.hc.core5.http.io.entity.EntityUtils;
+import org.apache.hc.core5.http.io.support.ClassicRequestBuilder;
+import org.apache.hc.core5.util.Timeout;
 
 @ExtendWith(WorkDirExtension.class)
 public class AsyncMiddleManServletTest
@@ -170,6 +185,86 @@ public class AsyncMiddleManServletTest
         LifeCycle.stop(proxy);
     }
 
+    /**
+     * Tests https://github.com/jetty/jetty.project/issues/11841
+     *
+     * @throws Exception
+     */
+    @Test
+    public void testServletExpect100ApacheHttpClient5() throws Exception
+    {
+        startServer(new HttpServlet()
+        {
+            private static final long serialVersionUID = 1L;
+            private AtomicInteger count = new AtomicInteger();
+
+            @Override
+            protected void service(HttpServletRequest request, HttpServletResponse response) throws IOException
+            {
+                // Adding logging may slow things down enough to not hang
+                // System.out.printf("Origin servicing %d%n", count.incrementAndGet());
+                // Send the 100 Continue.
+                ServletInputStream input = request.getInputStream();
+                // Echo the content.
+                IO.copy(input, response.getOutputStream());
+                // Slowing down the origin allows the test to not hang sometimes
+//                try {
+//                    Thread.sleep(50);
+//                } catch (InterruptedException e) {
+//                    e.printStackTrace();
+//                }
+            }
+        });
+        startProxy(new AsyncMiddleManServlet()
+        {
+            @Override
+            protected void onProxyResponseFailure(HttpServletRequest clientRequest, HttpServletResponse proxyResponse, Response serverResponse,
+                    Throwable failure) {
+                if (failure != null) {
+                    // This test shows the NPE on the console:
+                    failure.printStackTrace();
+                }
+                super.onProxyResponseFailure(clientRequest, proxyResponse, serverResponse, failure);
+            }
+
+            protected void service(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException
+            {
+                // Adding logging may slow things down enough to not hang
+                // System.out.printf("AsyncMiddleManServlet... %n");
+                super.service(request, response);
+            }
+        });
+
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setExpectContinueEnabled(true)
+                .setResponseTimeout(5, TimeUnit.SECONDS)
+                .build();
+        HttpHost proxyHost = new HttpHost("localhost", proxyConnector.getLocalPort());
+        HttpHost targetHost = new HttpHost("localhost", serverConnector.getLocalPort());
+        HttpRoutePlanner routePlanner = new DefaultProxyRoutePlanner(proxyHost);
+        try (CloseableHttpClient httpclient = HttpClients.custom()
+                .setDefaultRequestConfig(requestConfig)
+                .setRoutePlanner(routePlanner)
+                .build()) {
+            // loop to attempt increase odds of hanging
+            for (int i = 1; i <= 500_000; i++) {
+                long start = System.currentTimeMillis();
+                ClassicHttpRequest request = ClassicRequestBuilder.post("http://localhost:" + serverConnector.getLocalPort())
+                        .setHeader(HttpHeader.EXPECT.toString(), HttpHeaderValue.CONTINUE.toString())
+                        .setEntity("a")
+                        .build();
+                httpclient.execute(targetHost, request, response -> {
+                    // System.out.println(response.getCode() + " " + response.getReasonPhrase());
+                    assertEquals(200, response.getCode());
+                    HttpEntity entity = response.getEntity();
+                    EntityUtils.consume(entity);
+                    return null;
+                });
+                System.out.printf("# %,d %,d ms%n", i, System.currentTimeMillis() - start);
+            }
+        }
+    }
+    
     @Test
     public void testNewDestroy() throws Exception
     {
